@@ -1,0 +1,16 @@
+services:
+  sisct_reg:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sisct_reg
+    restart: unless-stopped
+    environment:
+      HOST: ${APP_HOST:-0.0.0.0}
+      PORT: ${APP_PORT:-8100}
+      APP_RELOAD: 0
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "${APP_PORT:-8100}:${APP_PORT:-8100}"
+    volumes:
+      - ./backend/data:/app/backend/data

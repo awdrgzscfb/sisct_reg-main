@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+frontend/dist/
+dist/
+backend/data/
+.env
+.env.*
+*.log
+*.local
+*.tsbuildinfo
