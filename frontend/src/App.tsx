@@ -6,7 +6,8 @@ type Executor = 'protocol' | 'headless' | 'headed'
 type SettingsTab = 'base' | 'mail' | 'uploads' | 'outlook'
 type OutlookDeleteScope = 'all' | 'taken'
 type ProxyDeleteScope = 'all'
-type UploadTarget = 'cpa' | 'sub2api'
+type UploadTarget = 'cpa' | 'sub2api' | 'codexproxy'
+type AutoUploadTarget = 'none' | 'cpa' | 'sub2api' | 'codexproxy' | 'both' | 'all'
 type DeleteDialogState = {
   items: AccountItem[]
 } | null
@@ -34,6 +35,10 @@ type FormState = {
   sub2api_api_url: string
   sub2api_api_key: string
   sub2api_group_ids: string
+  codexproxy_api_url: string
+  codexproxy_admin_key: string
+  codexproxy_proxy_url: string
+  auto_upload_target: AutoUploadTarget
 }
 
 type AccountItem = {
@@ -212,6 +217,10 @@ const defaultForm: FormState = {
   sub2api_api_url: '',
   sub2api_api_key: '',
   sub2api_group_ids: '2',
+  codexproxy_api_url: '',
+  codexproxy_admin_key: '',
+  codexproxy_proxy_url: '',
+  auto_upload_target: 'both',
 }
 
 const settingsTabs: Array<{ key: SettingsTab; label: string }> = [
@@ -871,6 +880,10 @@ export default function App() {
             sub2api_api_url: form.sub2api_api_url,
             sub2api_api_key: form.sub2api_api_key,
             sub2api_group_ids: form.sub2api_group_ids,
+            codexproxy_api_url: form.codexproxy_api_url,
+            codexproxy_admin_key: form.codexproxy_admin_key,
+            codexproxy_proxy_url: form.codexproxy_proxy_url,
+            auto_upload_target: form.auto_upload_target,
           },
         }),
       })
@@ -1109,6 +1122,15 @@ export default function App() {
                 luckmail_email_type: form.luckmail_email_type,
                 luckmail_domain: form.luckmail_domain,
                 tempmail_api_base: form.tempmail_api_base,
+                cpa_api_url: form.cpa_api_url,
+                cpa_api_key: form.cpa_api_key,
+                sub2api_api_url: form.sub2api_api_url,
+                sub2api_api_key: form.sub2api_api_key,
+                sub2api_group_ids: form.sub2api_group_ids,
+                codexproxy_api_url: form.codexproxy_api_url,
+                codexproxy_admin_key: form.codexproxy_admin_key,
+                codexproxy_proxy_url: form.codexproxy_proxy_url,
+                auto_upload_target: form.auto_upload_target,
               },
               phone_config: {},
             }),
@@ -1324,6 +1346,20 @@ export default function App() {
       return (
         <div className="settings-pane-body">
           <div className="sub-block">
+            <div className="sub-block-title">Auto Upload</div>
+            <label>
+              <span>Default target after success</span>
+              <select value={form.auto_upload_target} onChange={(e) => updateField('auto_upload_target', e.target.value as AutoUploadTarget)}>
+                <option value="none">Do not upload</option>
+                <option value="cpa">CPA only</option>
+                <option value="sub2api">Sub2API only</option>
+                <option value="codexproxy">CodexProxy only</option>
+                <option value="both">CPA + Sub2API</option>
+                <option value="all">Upload all</option>
+              </select>
+            </label>
+          </div>
+          <div className="sub-block">
             <div className="sub-block-title">默认执行设置</div>
             <div className="field-group two-col compact">
               <label>
@@ -1440,6 +1476,7 @@ export default function App() {
               ))}
             </div>
           </div>
+
         </div>
       )
     }
@@ -1508,6 +1545,22 @@ export default function App() {
             <label>
               <span>分组 ID</span>
               <input value={form.sub2api_group_ids} onChange={(e) => updateField('sub2api_group_ids', e.target.value)} placeholder="多个分组用英文逗号分隔，如 2,4,8" />
+            </label>
+          </div>
+
+          <div className="sub-block">
+            <div className="sub-block-title">CodexProxy 上传</div>
+            <label>
+              <span>API URL</span>
+              <input value={form.codexproxy_api_url} onChange={(e) => updateField('codexproxy_api_url', e.target.value)} placeholder="http://127.0.0.1:8090" />
+            </label>
+            <label>
+              <span>Admin Key</span>
+              <input value={form.codexproxy_admin_key} onChange={(e) => updateField('codexproxy_admin_key', e.target.value)} placeholder="your-admin-secret" />
+            </label>
+            <label>
+              <span>Proxy URL</span>
+              <input value={form.codexproxy_proxy_url} onChange={(e) => updateField('codexproxy_proxy_url', e.target.value)} placeholder="optional proxy url or leave empty" />
             </label>
           </div>
         </div>
@@ -1759,6 +1812,18 @@ export default function App() {
               </div>
             ) : null}
 
+            <label>
+              <span>Auto upload after success</span>
+              <select value={form.auto_upload_target} onChange={(e) => updateField('auto_upload_target', e.target.value as AutoUploadTarget)}>
+                <option value="none">Do not upload</option>
+                <option value="cpa">CPA only</option>
+                <option value="sub2api">Sub2API only</option>
+                <option value="codexproxy">CodexProxy only</option>
+                <option value="both">CPA + Sub2API</option>
+                <option value="all">Upload all</option>
+              </select>
+            </label>
+
             <div className="form-actions">
               <button className="primary-btn" type="submit" disabled={starting || loading}>
                 {starting ? (isRunning ? '追加中...' : '任务创建中...') : isRunning ? '追加账号' : '开始注册'}
@@ -1794,6 +1859,9 @@ export default function App() {
             </button>
             <button className="ghost-btn" type="button" onClick={() => void uploadSelectedAccounts('sub2api')} disabled={uploadingTarget !== null || selectedUploadableCount === 0}>
               {uploadingTarget === 'sub2api' ? '上传中...' : '上传Sub2API'}
+            </button>
+            <button className="ghost-btn" type="button" onClick={() => void uploadSelectedAccounts('codexproxy')} disabled={uploadingTarget !== null || selectedUploadableCount === 0}>
+              {uploadingTarget === 'codexproxy' ? '上传中...' : '上传CodexProxy'}
             </button>
             <button className="ghost-btn" type="button" onClick={() => void exportSelectedAccounts()} disabled={exportingZip || selectedUploadableCount === 0}>
               {exportingZip ? '导出中...' : '导出ZIP'}

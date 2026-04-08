@@ -43,7 +43,7 @@ class DeleteAccountsBatchRequest(BaseModel):
     items: list[DeleteAccountRequest] = Field(default_factory=list)
 
 
-UploadTarget = Literal["cpa", "sub2api"]
+UploadTarget = Literal["cpa", "sub2api", "codexproxy"]
 
 
 class UploadAccountsBatchRequest(BaseModel):

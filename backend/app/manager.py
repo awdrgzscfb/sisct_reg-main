@@ -56,6 +56,7 @@ from .external_uploads import (
     generate_cpa_token_json,
     sync_chatgpt_result,
     upload_to_cpa,
+    upload_to_codexproxy,
     upload_to_sub2api,
 )
 from .mail_providers import build_mail_provider
@@ -943,7 +944,7 @@ class RegistrationManager:
         text = str(message or "").strip()
         if re.match(r"^\[\d{2}:\d{2}:\d{2}\]\s+", text):
             entry = text
-        else:
+        elif target_name == "sub2api":
             ts = datetime.now().strftime("%H:%M:%S")
             entry = f"[{ts}] {text}"
         self._task_store.append_log(task_id, entry)
@@ -1552,7 +1553,7 @@ class RegistrationManager:
         items: list[Any],
     ) -> dict[str, Any]:
         target_name = str(target or "").strip().lower()
-        if target_name not in {"cpa", "sub2api"}:
+        if target_name not in {"cpa", "sub2api", "codexproxy"}:
             return {"ok": False, "reason": "invalid_target"}
 
         config = self._get_current_runtime_defaults()
@@ -1561,12 +1562,19 @@ class RegistrationManager:
             api_key = str(config.get("cpa_api_key") or "").strip()
             if not api_url:
                 return {"ok": False, "reason": "target_not_configured", "message": "CPA 上传未配置"}
-        else:
+        elif target_name == "sub2api":
             api_url = str(config.get("sub2api_api_url") or "").strip()
             api_key = str(config.get("sub2api_api_key") or "").strip()
             group_ids = config.get("sub2api_group_ids")
             if not api_url or not api_key:
                 return {"ok": False, "reason": "target_not_configured", "message": "Sub2API 上传未配置"}
+
+        if target_name == "codexproxy":
+            api_url = str(config.get("codexproxy_api_url") or "").strip()
+            admin_key = str(config.get("codexproxy_admin_key") or "").strip()
+            proxy_url = str(config.get("codexproxy_proxy_url") or "").strip()
+            if not api_url or not admin_key:
+                return {"ok": False, "reason": "target_not_configured", "message": "CodexProxy upload is not configured"}
 
         uploaded = 0
         failed = 0
@@ -1651,12 +1659,19 @@ class RegistrationManager:
             payload = self._result_to_upload_payload(row)
             if target_name == "cpa":
                 ok, message = upload_to_cpa(payload, api_url=api_url, api_key=api_key)
-            else:
+            elif target_name == "sub2api":
                 ok, message = upload_to_sub2api(
                     payload,
                     api_url=api_url,
                     api_key=api_key,
                     group_ids=group_ids,
+                )
+            else:
+                ok, message = upload_to_codexproxy(
+                    payload,
+                    api_url=api_url,
+                    admin_key=admin_key,
+                    proxy_url=proxy_url,
                 )
             if ok:
                 uploaded += 1

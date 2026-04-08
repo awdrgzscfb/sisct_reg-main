@@ -357,20 +357,97 @@ def upload_to_sub2api(result: Any, *, api_url: str, api_key: str, group_ids: Any
         return False, f"上传异常: {exc}"
 
 
+def upload_to_codexproxy(result: Any, *, api_url: str, admin_key: str, proxy_url: str = "") -> tuple[bool, str]:
+    api_url = str(api_url or "").strip()
+    admin_key = str(admin_key or "").strip()
+    proxy_url = str(proxy_url or "").strip()
+    if not api_url:
+        return False, "CodexProxy API URL 未配置"
+    if not admin_key:
+        return False, "CodexProxy Admin Key 未配置"
+
+    token_data = generate_cpa_token_json(result)
+    refresh_token = str(token_data.get("refresh_token") or getattr(result, "refresh_token", "") or "").strip()
+    email = str(token_data.get("email") or getattr(result, "email", "") or "").strip()
+    if not refresh_token:
+        return False, "Refresh Token is empty"
+
+    payload = {
+        "name": email or "codexproxy-account",
+        "refresh_token": refresh_token,
+        "proxy_url": proxy_url,
+    }
+    url = f"{api_url.rstrip('/')}/api/admin/accounts"
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/plain, */*",
+        "X-Admin-Key": admin_key,
+    }
+    try:
+        response = cffi_requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            proxies=None,
+            verify=False,
+            timeout=30,
+            impersonate="chrome110",
+        )
+        if response.status_code in (200, 201):
+            return True, "上传成功"
+        try:
+            detail = response.json()
+            if isinstance(detail, dict):
+                return False, str(detail.get("message") or detail.get("msg") or detail.get("error") or f"HTTP {response.status_code}")
+        except Exception:
+            pass
+        return False, f"上传失败: HTTP {response.status_code} - {response.text[:200]}"
+    except Exception as exc:
+        logger.exception("CodexProxy 上传异常")
+        return False, f"上传异常: {exc}"
+
+
 def sync_chatgpt_result(result: Any, config: dict[str, Any]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
+    auto_upload_target = str(config.get("auto_upload_target") or "both").strip().lower()
+    if auto_upload_target not in {"none", "cpa", "sub2api", "codexproxy", "both", "all"}:
+        auto_upload_target = "both"
+
+    if auto_upload_target == "none":
+        return results
 
     cpa_url = str(config.get("cpa_api_url") or "").strip()
     cpa_key = str(config.get("cpa_api_key") or "").strip()
-    if cpa_url:
-        ok, msg = upload_to_cpa(result, api_url=cpa_url, api_key=cpa_key)
-        results.append({"name": "CPA", "ok": ok, "msg": msg})
+    if auto_upload_target in {"cpa", "both", "all"}:
+        if cpa_url:
+            ok, msg = upload_to_cpa(result, api_url=cpa_url, api_key=cpa_key)
+            results.append({"name": "CPA", "ok": ok, "msg": msg})
+        else:
+            results.append({"name": "CPA", "ok": False, "msg": "CPA upload is not configured"})
 
     sub2api_url = str(config.get("sub2api_api_url") or "").strip()
     sub2api_key = str(config.get("sub2api_api_key") or "").strip()
     sub2api_group_ids = config.get("sub2api_group_ids")
-    if sub2api_url and sub2api_key:
-        ok, msg = upload_to_sub2api(result, api_url=sub2api_url, api_key=sub2api_key, group_ids=sub2api_group_ids)
-        results.append({"name": "Sub2API", "ok": ok, "msg": msg})
+    if auto_upload_target in {"sub2api", "both", "all"}:
+        if sub2api_url and sub2api_key:
+            ok, msg = upload_to_sub2api(result, api_url=sub2api_url, api_key=sub2api_key, group_ids=sub2api_group_ids)
+            results.append({"name": "Sub2API", "ok": ok, "msg": msg})
+        else:
+            results.append({"name": "Sub2API", "ok": False, "msg": "Sub2API upload is not configured"})
+
+    codexproxy_url = str(config.get("codexproxy_api_url") or "").strip()
+    codexproxy_admin_key = str(config.get("codexproxy_admin_key") or "").strip()
+    codexproxy_proxy_url = str(config.get("codexproxy_proxy_url") or "").strip()
+    if auto_upload_target in {"codexproxy", "all"}:
+        if codexproxy_url and codexproxy_admin_key:
+            ok, msg = upload_to_codexproxy(
+                result,
+                api_url=codexproxy_url,
+                admin_key=codexproxy_admin_key,
+                proxy_url=codexproxy_proxy_url,
+            )
+            results.append({"name": "CodexProxy", "ok": ok, "msg": msg})
+        else:
+            results.append({"name": "CodexProxy", "ok": False, "msg": "CodexProxy upload is not configured"})
 
     return results
