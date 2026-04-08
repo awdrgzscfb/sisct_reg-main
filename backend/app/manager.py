@@ -944,7 +944,7 @@ class RegistrationManager:
         text = str(message or "").strip()
         if re.match(r"^\[\d{2}:\d{2}:\d{2}\]\s+", text):
             entry = text
-        elif target_name == "sub2api":
+        else:
             ts = datetime.now().strftime("%H:%M:%S")
             entry = f"[{ts}] {text}"
         self._task_store.append_log(task_id, entry)
