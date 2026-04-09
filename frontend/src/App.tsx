@@ -41,6 +41,7 @@ type FormState = {
   auto_upload_target: AutoUploadTarget
   inbound_upload_auth_token: string
   inbound_upload_debug_logging: boolean
+  oauth_workspace_debug_logging: boolean
 }
 
 type AccountItem = {
@@ -225,6 +226,7 @@ const defaultForm: FormState = {
   auto_upload_target: 'both',
   inbound_upload_auth_token: '',
   inbound_upload_debug_logging: false,
+  oauth_workspace_debug_logging: false,
 }
 
 const settingsTabs: Array<{ key: SettingsTab; label: string }> = [
@@ -890,6 +892,7 @@ export default function App() {
             auto_upload_target: form.auto_upload_target,
             inbound_upload_auth_token: form.inbound_upload_auth_token,
             inbound_upload_debug_logging: form.inbound_upload_debug_logging,
+            oauth_workspace_debug_logging: form.oauth_workspace_debug_logging,
           },
         }),
       })
@@ -1383,6 +1386,17 @@ export default function App() {
                 onChange={(e) => updateField('inbound_upload_debug_logging', e.target.checked)}
               />
               <span>Enable debug logging for inbound uploads</span>
+            </label>
+          </div>
+          <div className="sub-block">
+            <div className="sub-block-title">OAuth Debug</div>
+            <label className="checkbox-row settings-checkbox-row">
+              <input
+                type="checkbox"
+                checked={form.oauth_workspace_debug_logging}
+                onChange={(e) => updateField('oauth_workspace_debug_logging', e.target.checked)}
+              />
+              <span>Enable add_phone/workspace diagnostic logs</span>
             </label>
           </div>
           <div className="sub-block">

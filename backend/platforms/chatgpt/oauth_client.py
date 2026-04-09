@@ -118,6 +118,88 @@ class OAuthClient:
         if sec_ch_ua:
             self.sec_ch_ua = str(sec_ch_ua or "").strip()
 
+    @staticmethod
+    def _config_flag_enabled(value) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _workspace_debug_enabled(self) -> bool:
+        return self._config_flag_enabled(
+            self.config.get("oauth_workspace_debug_logging")
+        )
+
+    def _workspace_debug(self, message: str) -> None:
+        if self._workspace_debug_enabled():
+            self._log(f"[workspace-debug] {message}")
+
+    def _workspace_debug_cookie_names(self) -> list[str]:
+        names: list[str] = []
+        try:
+            for cookie in self.session.cookies:
+                name = str(getattr(cookie, "name", "") or "").strip()
+                if not name:
+                    continue
+                lowered = name.lower()
+                if any(
+                    marker in lowered
+                    for marker in ("oai", "auth", "session", "workspace", "cf")
+                ):
+                    names.append(name)
+        except Exception:
+            return []
+        return sorted(set(names))
+
+    @staticmethod
+    def _summarize_workspace_session_data(session_data) -> str:
+        if not isinstance(session_data, dict):
+            return "none"
+
+        keys = sorted(str(key) for key in session_data.keys())
+        workspaces = (
+            session_data.get("workspaces")
+            if isinstance(session_data.get("workspaces"), list)
+            else []
+        )
+        workspace_ids = []
+        for item in workspaces[:3]:
+            if isinstance(item, dict) and item.get("id"):
+                workspace_ids.append(str(item.get("id")))
+
+        return (
+            f"keys={keys[:8]} "
+            f"workspace_count={len(workspaces)} "
+            f"workspace_ids={workspace_ids or []} "
+            f"has_session_id={'session_id' in session_data} "
+            f"has_client_id={'openai_client_id' in session_data}"
+        )
+
+    @staticmethod
+    def _summarize_html_markers(html: str) -> str:
+        import re
+
+        text = str(html or "")
+        if not text:
+            return "len=0 title=- markers=[]"
+
+        lowered = text.lower()
+        markers: list[str] = []
+        for label, marker in (
+            ("workspaces", "workspaces"),
+            ("workspace", "workspace"),
+            ("consent", "consent"),
+            ("add_phone", "add-phone"),
+            ("phone", "phone"),
+            ("callback", "callback"),
+            ("code", "code="),
+        ):
+            if marker in lowered:
+                markers.append(label)
+
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
+        title = re.sub(r"\s+", " ", title_match.group(1)).strip() if title_match else "-"
+        return f"len={len(text)} title={title[:80] or '-'} markers={markers[:8]}"
+
     def _log(self, msg):
         """输出日志"""
         if self.verbose:
@@ -2344,6 +2426,25 @@ class OAuthClient:
                     raw_dump = ""
                 if raw_dump:
                     self._log(f"add_phone 状态响应体(raw): {raw_dump}")
+                self._workspace_debug(
+                    "add_phone state: "
+                    f"page_type={state.page_type or '-'} "
+                    f"current_url={str(state.current_url or '-')[:180]} "
+                    f"continue_url={str(state.continue_url or '-')[:180]}"
+                )
+                self._workspace_debug(
+                    "cookies: "
+                    + (
+                        ", ".join(self._workspace_debug_cookie_names())
+                        or "no interesting cookies"
+                    )
+                )
+                self._workspace_debug(
+                    "cookie session snapshot before workspace resolution: "
+                    + self._summarize_workspace_session_data(
+                        self._decode_oauth_session_cookie()
+                    )
+                )
                 if not allow_phone_verification:
                     if self._state_supports_workspace_resolution(state):
                         self._log(
@@ -2552,6 +2653,9 @@ class OAuthClient:
     ):
         """提交 workspace 和 organization 选择（带重试）"""
         self._enter_stage("workspace_select", consent_url[:120] if consent_url else "")
+        self._workspace_debug(
+            f"workspace resolution entry: consent_url={str(consent_url or '')[:180]}"
+        )
         session_data = None
 
         for attempt in range(max_retries):
@@ -2571,6 +2675,11 @@ class OAuthClient:
             else:
                 self._set_error("无法获取 consent session 数据")
                 return None, None
+
+        self._workspace_debug(
+            "workspace session data resolved: "
+            + self._summarize_workspace_session_data(session_data)
+        )
 
         workspaces = session_data.get("workspaces", [])
         if not workspaces:
@@ -2761,19 +2870,35 @@ class OAuthClient:
     def _load_workspace_session_data(self, consent_url, user_agent, impersonate):
         """优先从 cookie 解码 session，失败时回退到 consent HTML 中提取 workspace 数据。"""
         session_data = self._decode_oauth_session_cookie()
+        self._workspace_debug(
+            "cookie session decode result: "
+            + self._summarize_workspace_session_data(session_data)
+        )
         if session_data and session_data.get("workspaces"):
+            self._workspace_debug("workspace session source: cookie")
             return session_data
 
         html = self._fetch_consent_page_html(consent_url, user_agent, impersonate)
         if not html:
+            self._workspace_debug("consent html fetch result: empty body")
             return session_data
+
+        self._workspace_debug(
+            "consent html snapshot: " + self._summarize_html_markers(html)
+        )
 
         parsed = self._extract_session_data_from_consent_html(html)
         if parsed and parsed.get("workspaces"):
             self._log(
                 f"从 consent HTML 提取到 {len(parsed.get('workspaces', []))} 个 workspace"
             )
+            self._workspace_debug(
+                "workspace session source: consent_html "
+                + self._summarize_workspace_session_data(parsed)
+            )
             return parsed
+
+        self._workspace_debug("consent html parse result: no workspace session extracted")
 
         return session_data
 
@@ -2792,11 +2917,19 @@ class OAuthClient:
                 kwargs["impersonate"] = impersonate
             self._browser_pause(0.12, 0.3)
             r = self.session.get(consent_url, **kwargs)
+            self._workspace_debug(
+                "consent html GET: "
+                f"status={r.status_code} "
+                f"url={str(r.url)[:180]} "
+                f"content_type={str(r.headers.get('content-type', '')).split(';', 1)[0]} "
+                f"location={str(r.headers.get('Location', '') or '-')[:180]}"
+            )
             if r.status_code == 200 and "text/html" in (
                 r.headers.get("content-type", "").lower()
             ):
                 return r.text
         except Exception:
+            self._workspace_debug("consent html GET raised exception")
             pass
         return ""
 
@@ -2902,11 +3035,13 @@ class OAuthClient:
 
     def _decode_oauth_session_cookie(self):
         """解码 oai-client-auth-session cookie"""
+        found_cookie = False
         try:
             for cookie in self.session.cookies:
                 try:
                     name = cookie.name if hasattr(cookie, "name") else str(cookie)
                     if name == "oai-client-auth-session":
+                        found_cookie = True
                         value = (
                             cookie.value
                             if hasattr(cookie, "value")
@@ -2915,11 +3050,21 @@ class OAuthClient:
                         if value:
                             data = self._decode_cookie_json_value(value)
                             if data:
+                                self._workspace_debug(
+                                    "decoded oai-client-auth-session: "
+                                    + self._summarize_workspace_session_data(data)
+                                )
                                 return data
+                            self._workspace_debug(
+                                "oai-client-auth-session present but decode returned empty"
+                            )
                 except Exception:
                     continue
         except Exception:
             pass
+
+        if not found_cookie:
+            self._workspace_debug("oai-client-auth-session cookie not present")
 
         return None
 
