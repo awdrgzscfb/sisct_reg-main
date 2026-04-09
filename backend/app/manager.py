@@ -363,6 +363,46 @@ class RegistrationManager:
         threading.Thread(target=self._run_task, args=(task_id, req, merged_config), daemon=True).start()
         return task_id
 
+    def create_external_outlook_upload_task(self, emails: list[str], merged_config: dict[str, Any]) -> str:
+        normalized_emails: list[str] = []
+        seen: set[str] = set()
+        for raw_email in emails or []:
+            email = str(raw_email or "").strip().lower()
+            if not email or email in seen:
+                continue
+            seen.add(email)
+            normalized_emails.append(email)
+        if not normalized_emails:
+            raise ValueError("no_emails_to_schedule")
+
+        default_concurrency = max(1, int(merged_config.get("concurrency") or DEFAULT_CONFIG.get("concurrency") or 1))
+        req = CreateRegisterTaskRequest(
+            count=len(normalized_emails),
+            concurrency=min(len(normalized_emails), default_concurrency),
+            register_delay_seconds=float(
+                merged_config.get("register_delay_seconds") or DEFAULT_CONFIG.get("register_delay_seconds") or 0
+            ),
+            email=None,
+            password=None,
+            proxy=str(merged_config.get("proxy") or "").strip() or None,
+            use_proxy=bool(merged_config.get("use_proxy", DEFAULT_CONFIG.get("use_proxy", True))),
+            executor_type=str(merged_config.get("executor_type") or DEFAULT_CONFIG.get("executor_type") or "protocol"),
+            mail_provider="outlook_local",
+            provider_config={"external_uploaded_emails": list(normalized_emails)},
+            phone_config={},
+        )
+        return self.create_task(
+            req,
+            merged_config,
+            source="external_upload",
+            meta={
+                "trigger": "outlook_upload_listener",
+                "run_mode": "uploaded_outlook_accounts",
+                "uploaded_count": len(normalized_emails),
+                "uploaded_email_preview": normalized_emails[:10],
+            },
+        )
+
     def _next_log_seq(self, task_id: str) -> int:
         with self._lock:
             seq = self._log_sequences.get(task_id, 0) + 1
@@ -1971,8 +2011,22 @@ class RegistrationManager:
             self._task_store.cleanup()
             return
 
-        for index in range(req.count):
-            state.enqueue(QueuedAttempt(attempt_index=index + 1))
+        uploaded_outlook_emails = (
+            list(req.provider_config.get("external_uploaded_emails") or [])
+            if isinstance(req.provider_config, dict)
+            else []
+        )
+        if req.mail_provider == "outlook_local" and uploaded_outlook_emails:
+            for index, email in enumerate(uploaded_outlook_emails[: req.count]):
+                state.enqueue(
+                    QueuedAttempt(
+                        attempt_index=index + 1,
+                        req_overrides={"email": str(email or "").strip().lower() or None},
+                    )
+                )
+        else:
+            for index in range(req.count):
+                state.enqueue(QueuedAttempt(attempt_index=index + 1))
         state.mark_initial_enqueued()
 
         def do_one(queued_attempt: QueuedAttempt):

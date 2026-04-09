@@ -8,7 +8,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .db import finalize_orphaned_tasks, get_config, get_task_events, init_db, parse_config_row_values, set_config
+from .db import (
+    batch_import_outlook_accounts,
+    finalize_orphaned_tasks,
+    get_config,
+    get_task_events,
+    init_db,
+    parse_config_row_values,
+    set_config,
+)
 from .defaults import DEFAULT_CONFIG
 from .luckmail_pool import router as luckmail_pool_router
 from .manager import manager
@@ -20,6 +28,7 @@ from .schemas import (
     DeleteAccountRequest,
     DeleteAccountsBatchRequest,
     ExportAccountsBatchRequest,
+    InboundOutlookUploadRequest,
     UpdateConfigRequest,
     UploadAccountsBatchRequest,
 )
@@ -57,6 +66,50 @@ def write_config(body: UpdateConfigRequest):
     merged = dict(DEFAULT_CONFIG)
     merged.update(stored)
     return {"ok": True, "config": merged}
+
+
+@app.post("/api/inbound/outlook-upload")
+def inbound_outlook_upload(body: InboundOutlookUploadRequest):
+    stored = parse_config_row_values(get_config())
+    merged = dict(DEFAULT_CONFIG)
+    merged.update(stored)
+
+    configured_token = str(merged.get("inbound_upload_auth_token") or "").strip()
+    request_token = str(body.server_upload_other.auth_token or "").strip()
+    if not configured_token:
+        raise HTTPException(409, "inbound_upload_auth_token 未配置")
+    if not request_token or request_token != configured_token:
+        raise HTTPException(401, "auth_token 无效")
+
+    import_result = batch_import_outlook_accounts(body.data, enabled=True)
+    run_now = str(body.server_upload_other.IsRun or "").strip() == "1"
+    imported_accounts = import_result.get("accounts") if isinstance(import_result.get("accounts"), list) else []
+    scheduled_emails = [
+        str(item.get("email") or "").strip().lower()
+        for item in imported_accounts
+        if str(item.get("status") or "").strip().lower() in {"imported", "updated"} and str(item.get("email") or "").strip()
+    ]
+
+    response: dict[str, object] = {
+        "ok": True,
+        "mode": "import_and_run" if run_now else "import_only",
+        "import": {
+            "total": int(import_result.get("total") or 0),
+            "success": int(import_result.get("success") or 0),
+            "updated": int(import_result.get("updated") or 0),
+            "failed": int(import_result.get("failed") or 0),
+        },
+        "scheduled_emails": scheduled_emails,
+    }
+    if not run_now or not scheduled_emails:
+        if run_now and not scheduled_emails:
+            response["mode"] = "import_only"
+            response["message"] = "本次未导入可执行的 Outlook 账号"
+        return response
+
+    task_id = manager.create_external_outlook_upload_task(scheduled_emails, merged)
+    response["task_id"] = task_id
+    return response
 
 
 @app.post("/api/register/tasks")

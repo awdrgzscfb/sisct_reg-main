@@ -39,6 +39,7 @@ type FormState = {
   codexproxy_admin_key: string
   codexproxy_proxy_url: string
   auto_upload_target: AutoUploadTarget
+  inbound_upload_auth_token: string
 }
 
 type AccountItem = {
@@ -221,6 +222,7 @@ const defaultForm: FormState = {
   codexproxy_admin_key: '',
   codexproxy_proxy_url: '',
   auto_upload_target: 'both',
+  inbound_upload_auth_token: '',
 }
 
 const settingsTabs: Array<{ key: SettingsTab; label: string }> = [
@@ -884,6 +886,7 @@ export default function App() {
             codexproxy_admin_key: form.codexproxy_admin_key,
             codexproxy_proxy_url: form.codexproxy_proxy_url,
             auto_upload_target: form.auto_upload_target,
+            inbound_upload_auth_token: form.inbound_upload_auth_token,
           },
         }),
       })
@@ -1357,6 +1360,18 @@ export default function App() {
                 <option value="both">CPA + Sub2API</option>
                 <option value="all">Upload all</option>
               </select>
+            </label>
+          </div>
+          <div className="sub-block">
+            <div className="sub-block-title">Inbound Upload</div>
+            <label>
+              <span>Shared auth token</span>
+              <input
+                type="password"
+                value={form.inbound_upload_auth_token}
+                onChange={(e) => updateField('inbound_upload_auth_token', e.target.value)}
+                placeholder="used by /api/inbound/outlook-upload"
+              />
             </label>
           </div>
           <div className="sub-block">
@@ -1835,7 +1850,7 @@ export default function App() {
         <section className="panel account-panel">
           <div className="panel-title-row">
             <h2>账号列表</h2>
-            <span>{activeTask?.id || '-'}</span>
+            <span>{activeTask?.id || '-'}{activeTask?.source === 'external_upload' ? ' · 外部触发' : ''}</span>
           </div>
 
           <div className="stats-grid compact-stats">

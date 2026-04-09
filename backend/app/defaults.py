@@ -22,6 +22,7 @@ DEFAULT_CONFIG = {
     "codexproxy_admin_key": "",
     "codexproxy_proxy_url": "",
     "auto_upload_target": "both",
+    "inbound_upload_auth_token": "",
     "smstome_cookie": "",
     "smstome_country_slugs": "united-kingdom,poland,finland",
     "smstome_phone_attempts": 3,

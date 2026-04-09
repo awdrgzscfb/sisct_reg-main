@@ -12,5 +12,6 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
     ports:
       - "${APP_PORT:-8100}:${APP_PORT:-8100}"
+      - "8082:${APP_PORT:-8100}"
     volumes:
       - ./backend/data:/app/backend/data

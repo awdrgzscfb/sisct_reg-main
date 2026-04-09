@@ -27,6 +27,16 @@ class UpdateConfigRequest(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
 
 
+class InboundServerUploadOther(BaseModel):
+    IsRun: str = Field(default="0")
+    auth_token: str = Field(default="")
+
+
+class InboundOutlookUploadRequest(BaseModel):
+    data: str = Field(default="")
+    server_upload_other: InboundServerUploadOther = Field(default_factory=InboundServerUploadOther)
+
+
 class DeleteAccountRef(BaseModel):
     task_id: str
     attempt_index: int = Field(ge=1)
