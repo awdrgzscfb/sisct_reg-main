@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -32,6 +33,8 @@ from .schemas import (
     UpdateConfigRequest,
     UploadAccountsBatchRequest,
 )
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="ChatGPT Register Workbench", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -73,13 +76,28 @@ def inbound_outlook_upload(body: InboundOutlookUploadRequest):
     stored = parse_config_row_values(get_config())
     merged = dict(DEFAULT_CONFIG)
     merged.update(stored)
+    debug_logging = bool(merged.get("inbound_upload_debug_logging"))
 
     configured_token = str(merged.get("inbound_upload_auth_token") or "").strip()
     request_token = str(body.server_upload_other.auth_token or "").strip()
     if not configured_token:
         raise HTTPException(409, "inbound_upload_auth_token 未配置")
     if not request_token or request_token != configured_token:
+        if debug_logging:
+            logger.warning(
+                "Inbound outlook upload auth failed: IsRun=%s data_length=%s",
+                str(body.server_upload_other.IsRun or "").strip(),
+                len(str(body.data or "")),
+            )
         raise HTTPException(401, "auth_token 无效")
+
+    if debug_logging:
+        logger.info(
+            "Inbound outlook upload request received: IsRun=%s data_length=%s data=%s",
+            str(body.server_upload_other.IsRun or "").strip(),
+            len(str(body.data or "")),
+            body.data,
+        )
 
     import_result = batch_import_outlook_accounts(body.data, enabled=True)
     run_now = str(body.server_upload_other.IsRun or "").strip() == "1"
@@ -89,6 +107,20 @@ def inbound_outlook_upload(body: InboundOutlookUploadRequest):
         for item in imported_accounts
         if str(item.get("status") or "").strip().lower() in {"imported", "updated"} and str(item.get("email") or "").strip()
     ]
+
+    if debug_logging:
+        logger.info(
+            "Inbound outlook upload import result: run_now=%s total=%s success=%s updated=%s failed=%s scheduled=%s",
+            run_now,
+            int(import_result.get("total") or 0),
+            int(import_result.get("success") or 0),
+            int(import_result.get("updated") or 0),
+            int(import_result.get("failed") or 0),
+            len(scheduled_emails),
+        )
+        import_errors = import_result.get("errors")
+        if isinstance(import_errors, list) and import_errors:
+            logger.info("Inbound outlook upload import errors: %s", import_errors)
 
     response: dict[str, object] = {
         "ok": True,
@@ -108,6 +140,12 @@ def inbound_outlook_upload(body: InboundOutlookUploadRequest):
         return response
 
     task_id = manager.create_external_outlook_upload_task(scheduled_emails, merged)
+    if debug_logging:
+        logger.info(
+            "Inbound outlook upload scheduled task: task_id=%s scheduled_emails=%s",
+            task_id,
+            scheduled_emails,
+        )
     response["task_id"] = task_id
     return response
 

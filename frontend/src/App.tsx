@@ -40,6 +40,7 @@ type FormState = {
   codexproxy_proxy_url: string
   auto_upload_target: AutoUploadTarget
   inbound_upload_auth_token: string
+  inbound_upload_debug_logging: boolean
 }
 
 type AccountItem = {
@@ -223,6 +224,7 @@ const defaultForm: FormState = {
   codexproxy_proxy_url: '',
   auto_upload_target: 'both',
   inbound_upload_auth_token: '',
+  inbound_upload_debug_logging: false,
 }
 
 const settingsTabs: Array<{ key: SettingsTab; label: string }> = [
@@ -887,6 +889,7 @@ export default function App() {
             codexproxy_proxy_url: form.codexproxy_proxy_url,
             auto_upload_target: form.auto_upload_target,
             inbound_upload_auth_token: form.inbound_upload_auth_token,
+            inbound_upload_debug_logging: form.inbound_upload_debug_logging,
           },
         }),
       })
@@ -1372,6 +1375,14 @@ export default function App() {
                 onChange={(e) => updateField('inbound_upload_auth_token', e.target.value)}
                 placeholder="used by /api/inbound/outlook-upload"
               />
+            </label>
+            <label className="checkbox-row settings-checkbox-row">
+              <input
+                type="checkbox"
+                checked={form.inbound_upload_debug_logging}
+                onChange={(e) => updateField('inbound_upload_debug_logging', e.target.checked)}
+              />
+              <span>Enable debug logging for inbound uploads</span>
             </label>
           </div>
           <div className="sub-block">
