@@ -22,6 +22,7 @@ from .defaults import DEFAULT_CONFIG
 from .luckmail_pool import router as luckmail_pool_router
 from .manager import manager
 from .outlook_pool import router as outlook_router
+from .pool_monitor import AccountPoolMonitor
 from .proxy_pool import router as proxy_router
 from .schemas import (
     AppendTaskRequest,
@@ -41,17 +42,34 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 app.include_router(outlook_router)
 app.include_router(luckmail_pool_router)
 app.include_router(proxy_router)
+pool_monitor = AccountPoolMonitor(manager)
 
 
 @app.on_event("startup")
 def _startup():
     init_db()
     finalize_orphaned_tasks()
+    pool_monitor.start()
+
+
+@app.on_event("shutdown")
+def _shutdown():
+    pool_monitor.stop()
 
 
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/api/pool-monitor/status")
+def pool_monitor_status():
+    return pool_monitor.get_status()
+
+
+@app.post("/api/pool-monitor/test")
+def pool_monitor_test():
+    return pool_monitor.test_connection()
 
 
 @app.get("/api/config")

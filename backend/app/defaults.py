@@ -33,4 +33,12 @@ DEFAULT_CONFIG = {
     "smstome_sync_max_pages_per_country": 5,
     "chatgpt_register_otp_wait_seconds": 600,
     "chatgpt_register_otp_resend_wait_seconds": 300,
+    "pool_monitor_enabled": False,
+    "pool_monitor_interval_seconds": 60,
+    "pool_monitor_threshold": 10,
+    "pool_monitor_target_count": 20,
+    "pool_monitor_cooldown_seconds": 300,
+    "pool_monitor_account_status": "active",
+    "pool_monitor_request_timeout_seconds": 15,
+    "pool_monitor_debug_logging": False,
 }

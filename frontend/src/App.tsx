@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { apiFetch } from './lib/api'
+import { apiFetch, formatTime } from './lib/api'
 
 type MailProvider = 'luckmail' | 'tempmail_lol' | 'outlook_local'
 type Executor = 'protocol' | 'headless' | 'headed'
@@ -42,6 +42,13 @@ type FormState = {
   inbound_upload_auth_token: string
   inbound_upload_debug_logging: boolean
   oauth_workspace_debug_logging: boolean
+  pool_monitor_enabled: boolean
+  pool_monitor_interval_seconds: number
+  pool_monitor_threshold: number
+  pool_monitor_target_count: number
+  pool_monitor_cooldown_seconds: number
+  pool_monitor_account_status: string
+  pool_monitor_debug_logging: boolean
 }
 
 type AccountItem = {
@@ -202,6 +209,33 @@ type ProxyImportResult = {
   summary: ProxyPoolSummary
 }
 
+type PoolMonitorStatus = {
+  running: boolean
+  enabled: boolean
+  status: string
+  message: string
+  last_check_at: number
+  last_active_count: number
+  last_total_count: number
+  last_task_id: string
+  last_error: string
+  check_count: number
+  trigger_count: number
+}
+
+type PoolMonitorConnectionTestResult = {
+  ok: boolean
+  reason?: string
+  message: string
+  checked_at: number
+  elapsed_ms?: number
+  api_url?: string
+  total_count?: number
+  active_count?: number
+  status_filter?: string[]
+  status_counts?: Record<string, number>
+}
+
 const defaultForm: FormState = {
   count: 1,
   concurrency: 1,
@@ -227,6 +261,13 @@ const defaultForm: FormState = {
   inbound_upload_auth_token: '',
   inbound_upload_debug_logging: false,
   oauth_workspace_debug_logging: false,
+  pool_monitor_enabled: false,
+  pool_monitor_interval_seconds: 60,
+  pool_monitor_threshold: 10,
+  pool_monitor_target_count: 20,
+  pool_monitor_cooldown_seconds: 300,
+  pool_monitor_account_status: 'active',
+  pool_monitor_debug_logging: false,
 }
 
 const settingsTabs: Array<{ key: SettingsTab; label: string }> = [
@@ -270,6 +311,31 @@ function getStatusLabel(status: string) {
     idle: '空闲',
   }
   return mapping[status] || status
+}
+
+function getPoolMonitorStatusLabel(status: string) {
+  const mapping: Record<string, string> = {
+    idle: '空闲',
+    running: '运行中',
+    disabled: '已禁用',
+    misconfigured: '配置缺失',
+    healthy: '水位正常',
+    low: '低水位',
+    busy: '任务占用中',
+    cooldown: '冷却中',
+    triggered: '已触发补号',
+    error: '异常',
+    stopped: '已停止',
+  }
+  return mapping[String(status || '').toLowerCase()] || status || '-'
+}
+
+function getPoolMonitorStatusClass(status: string) {
+  const value = String(status || '').toLowerCase()
+  if (value === 'healthy' || value === 'triggered' || value === 'running') return 'status-done'
+  if (value === 'error' || value === 'misconfigured') return 'status-failed'
+  if (value === 'low' || value === 'cooldown' || value === 'busy') return 'status-stopped'
+  return 'status-running'
 }
 
 function getStageLabel(stage: string) {
@@ -383,6 +449,8 @@ export default function App() {
   const [outlookSummary, setOutlookSummary] = useState<OutlookPoolSummary | null>(null)
   const [luckmailTokenSummary, setLuckmailTokenSummary] = useState<LuckMailTokenPoolSummary | null>(null)
   const [proxySummary, setProxySummary] = useState<ProxyPoolSummary | null>(null)
+  const [poolMonitorStatus, setPoolMonitorStatus] = useState<PoolMonitorStatus | null>(null)
+  const [poolMonitorTestResult, setPoolMonitorTestResult] = useState<PoolMonitorConnectionTestResult | null>(null)
   const [outlookImportText, setOutlookImportText] = useState('')
   const [luckmailTokenImportText, setLuckmailTokenImportText] = useState('')
   const [proxyImportText, setProxyImportText] = useState('')
@@ -396,6 +464,8 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [loadingPoolMonitorStatus, setLoadingPoolMonitorStatus] = useState(false)
+  const [testingPoolMonitorConnection, setTestingPoolMonitorConnection] = useState(false)
   const [importingOutlook, setImportingOutlook] = useState(false)
   const [importingLuckmailToken, setImportingLuckmailToken] = useState(false)
   const [importingProxy, setImportingProxy] = useState(false)
@@ -665,6 +735,17 @@ export default function App() {
     return () => window.clearInterval(timer)
   }, [taskSnapshots, activeTask?.id, eventSourceRef.current])
 
+  useEffect(() => {
+    if (!showSettings || settingsTab !== 'base') return
+
+    void loadPoolMonitorStatus(true)
+    const timer = window.setInterval(() => {
+      void loadPoolMonitorStatus(true)
+    }, 5000)
+
+    return () => window.clearInterval(timer)
+  }, [showSettings, settingsTab, form.pool_monitor_enabled])
+
   async function bootstrap() {
     try {
       const config = await apiFetch<Partial<FormState>>('/api/config')
@@ -672,6 +753,7 @@ export default function App() {
       await loadOutlookSummary()
       await loadLuckmailTokenSummary()
       await loadProxySummary()
+      await loadPoolMonitorStatus(true)
       const snapshots = await loadTaskSnapshots()
       const runningSnapshot = snapshots.find((item) => item.is_active && !['done', 'failed', 'stopped'].includes(item.status))
       const nextActiveTask = runningSnapshot || snapshots[0] || null
@@ -700,6 +782,34 @@ export default function App() {
   async function loadProxySummary() {
     const summary = await apiFetch<ProxyPoolSummary>('/api/proxies/summary')
     setProxySummary(summary)
+  }
+
+  async function loadPoolMonitorStatus(silent = false) {
+    if (!silent) setLoadingPoolMonitorStatus(true)
+    try {
+      const status = await apiFetch<PoolMonitorStatus>('/api/pool-monitor/status')
+      setPoolMonitorStatus(status)
+    } catch (err) {
+      if (!silent) {
+        setError(err instanceof Error ? err.message : '加载号池监控状态失败')
+      }
+    } finally {
+      if (!silent) setLoadingPoolMonitorStatus(false)
+    }
+  }
+
+  async function testPoolMonitorConnection() {
+    setTestingPoolMonitorConnection(true)
+    setError('')
+    try {
+      const result = await apiFetch<PoolMonitorConnectionTestResult>('/api/pool-monitor/test', { method: 'POST' })
+      setPoolMonitorTestResult(result)
+      await loadPoolMonitorStatus(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '测试号池连接失败')
+    } finally {
+      setTestingPoolMonitorConnection(false)
+    }
   }
 
   async function loadTaskSnapshots(preferTaskId?: string) {
@@ -893,9 +1003,17 @@ export default function App() {
             inbound_upload_auth_token: form.inbound_upload_auth_token,
             inbound_upload_debug_logging: form.inbound_upload_debug_logging,
             oauth_workspace_debug_logging: form.oauth_workspace_debug_logging,
+            pool_monitor_enabled: form.pool_monitor_enabled,
+            pool_monitor_interval_seconds: Number(form.pool_monitor_interval_seconds),
+            pool_monitor_threshold: Number(form.pool_monitor_threshold),
+            pool_monitor_target_count: Number(form.pool_monitor_target_count),
+            pool_monitor_cooldown_seconds: Number(form.pool_monitor_cooldown_seconds),
+            pool_monitor_account_status: form.pool_monitor_account_status,
+            pool_monitor_debug_logging: form.pool_monitor_debug_logging,
           },
         }),
       })
+      await loadPoolMonitorStatus(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存默认配置失败')
     } finally {
@@ -1366,6 +1484,127 @@ export default function App() {
                 <option value="both">CPA + Sub2API</option>
                 <option value="all">Upload all</option>
               </select>
+            </label>
+          </div>
+          <div className="sub-block">
+            <div className="sub-block-title">号池监控补号</div>
+            <div className="mini-stats-grid">
+              <StatCard label="正常账号" value={poolMonitorStatus?.last_active_count ?? '-'} tone="success" />
+              <StatCard label="号池总数" value={poolMonitorStatus?.last_total_count ?? '-'} />
+              <StatCard label="检测次数" value={poolMonitorStatus?.check_count ?? 0} />
+              <StatCard label="触发次数" value={poolMonitorStatus?.trigger_count ?? 0} tone="info" />
+            </div>
+            <div className="inline-meta-row">
+              <span>
+                状态：
+                <span className={`history-badge ${getPoolMonitorStatusClass(poolMonitorStatus?.status || '')}`}>
+                  {getPoolMonitorStatusLabel(poolMonitorStatus?.status || '')}
+                </span>
+              </span>
+              <span>最近检测：{formatTime(poolMonitorStatus?.last_check_at)}</span>
+            </div>
+            <div className="helper-note compact-note">
+              <strong>监控信息</strong>
+              <p>{poolMonitorStatus?.message || '-'}</p>
+              <p>最近触发任务：{poolMonitorStatus?.last_task_id || '-'}</p>
+              {poolMonitorStatus?.last_error ? <p>最近异常：{poolMonitorStatus.last_error}</p> : null}
+            </div>
+            <div className="form-actions split-actions">
+              <button
+                className="ghost-btn"
+                type="button"
+                onClick={() => void loadPoolMonitorStatus()}
+                disabled={loadingPoolMonitorStatus}
+              >
+                {loadingPoolMonitorStatus ? '刷新中...' : '刷新监控状态'}
+              </button>
+              <button
+                className="ghost-btn"
+                type="button"
+                onClick={() => void testPoolMonitorConnection()}
+                disabled={testingPoolMonitorConnection}
+              >
+                {testingPoolMonitorConnection ? '测试中...' : '测试号池连接'}
+              </button>
+            </div>
+            {poolMonitorTestResult ? (
+              <div className="helper-note compact-note">
+                <strong>{poolMonitorTestResult.ok ? '连接测试成功' : '连接测试失败'}</strong>
+                <p>{poolMonitorTestResult.message || '-'}</p>
+                <p>检测时间：{formatTime(poolMonitorTestResult.checked_at)}</p>
+                <p>耗时：{poolMonitorTestResult.elapsed_ms ?? '-'} ms</p>
+                {poolMonitorTestResult.ok ? (
+                  <p>总账号：{poolMonitorTestResult.total_count ?? '-'}，正常账号：{poolMonitorTestResult.active_count ?? '-'}</p>
+                ) : null}
+              </div>
+            ) : null}
+            <label className="checkbox-row settings-checkbox-row">
+              <input
+                type="checkbox"
+                checked={form.pool_monitor_enabled}
+                onChange={(e) => updateField('pool_monitor_enabled', e.target.checked)}
+              />
+              <span>启用自动监控并触发注册</span>
+            </label>
+            <div className="field-group two-col compact">
+              <label>
+                <span>检测间隔(秒)</span>
+                <input
+                  type="number"
+                  min={5}
+                  max={86400}
+                  value={form.pool_monitor_interval_seconds}
+                  onChange={(e) => updateField('pool_monitor_interval_seconds', Number(e.target.value))}
+                />
+              </label>
+              <label>
+                <span>低水位阈值</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100000}
+                  value={form.pool_monitor_threshold}
+                  onChange={(e) => updateField('pool_monitor_threshold', Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <div className="field-group two-col compact">
+              <label>
+                <span>补到目标数</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={100000}
+                  value={form.pool_monitor_target_count}
+                  onChange={(e) => updateField('pool_monitor_target_count', Number(e.target.value))}
+                />
+              </label>
+              <label>
+                <span>触发冷却(秒)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={86400}
+                  value={form.pool_monitor_cooldown_seconds}
+                  onChange={(e) => updateField('pool_monitor_cooldown_seconds', Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <label>
+              <span>正常状态过滤(逗号分隔)</span>
+              <input
+                value={form.pool_monitor_account_status}
+                onChange={(e) => updateField('pool_monitor_account_status', e.target.value)}
+                placeholder="active"
+              />
+            </label>
+            <label className="checkbox-row settings-checkbox-row">
+              <input
+                type="checkbox"
+                checked={form.pool_monitor_debug_logging}
+                onChange={(e) => updateField('pool_monitor_debug_logging', e.target.checked)}
+              />
+              <span>记录监控调试日志</span>
             </label>
           </div>
           <div className="sub-block">

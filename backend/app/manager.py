@@ -403,6 +403,49 @@ class RegistrationManager:
             },
         )
 
+    def has_active_tasks(self) -> bool:
+        return self._task_store.has_active(platform="chatgpt")
+
+    def create_auto_replenish_task(
+        self,
+        count: int,
+        merged_config: dict[str, Any],
+        *,
+        trigger_meta: dict[str, Any] | None = None,
+    ) -> str:
+        target_count = max(1, int(count or 0))
+        default_concurrency = max(1, int(merged_config.get("concurrency") or DEFAULT_CONFIG.get("concurrency") or 1))
+        executor_type = str(merged_config.get("executor_type") or DEFAULT_CONFIG.get("executor_type") or "protocol").strip()
+        if executor_type not in {"protocol", "headless", "headed"}:
+            executor_type = "protocol"
+        mail_provider = str(merged_config.get("mail_provider") or DEFAULT_CONFIG.get("mail_provider") or "luckmail").strip()
+        if mail_provider not in {"luckmail", "tempmail_lol", "outlook_local"}:
+            mail_provider = "luckmail"
+
+        req = CreateRegisterTaskRequest(
+            count=target_count,
+            concurrency=min(target_count, default_concurrency, 100),
+            register_delay_seconds=float(
+                merged_config.get("register_delay_seconds") or DEFAULT_CONFIG.get("register_delay_seconds") or 0
+            ),
+            email=None,
+            password=None,
+            proxy=str(merged_config.get("proxy") or "").strip() or None,
+            use_proxy=bool(merged_config.get("use_proxy", DEFAULT_CONFIG.get("use_proxy", True))),
+            executor_type=executor_type,
+            mail_provider=mail_provider,
+            provider_config={},
+            phone_config={},
+        )
+        meta = {
+            "trigger": "pool_monitor",
+            "run_mode": "auto_replenish",
+            "requested_count": target_count,
+        }
+        if isinstance(trigger_meta, dict):
+            meta.update(trigger_meta)
+        return self.create_task(req, merged_config, source="pool_monitor", meta=meta)
+
     def _next_log_seq(self, task_id: str) -> int:
         with self._lock:
             seq = self._log_sequences.get(task_id, 0) + 1
